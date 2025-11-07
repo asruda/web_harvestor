@@ -282,6 +282,11 @@ class MainWindow(QMainWindow):
         if site:
             self.current_site_label.setText(f"当前: {site['name']}")
             
+            # 在浏览器视图中加载页面
+            if self.browser_view:
+                self.browser_view.setUrl(QUrl(site['start_url']))
+                self.log(f"🌐 正在加载网站: {site['start_url']}")
+            
             # 获取页面配置
             pages = self.page_config_model.get_by_site(site_id)
             if pages:
@@ -341,9 +346,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "未找到抓取策略")
             return
         
-        # 在浏览器视图中加载页面
-        if self.browser_view:
-            self.browser_view.setUrl(QUrl(site['start_url']))
         
         self.log("🚀 开始抓取任务...")
         self.start_btn.setEnabled(False)
