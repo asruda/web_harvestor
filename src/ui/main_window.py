@@ -2,11 +2,12 @@
 主窗口 - PyQt6主界面
 """
 
-from src.crawler.crawler_engine import CrawlerEngine
 import sys
 import asyncio
-from typing import Any, Optional
+import os
+import platform
 import uuid
+from typing import Any, Optional
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -25,9 +26,64 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal, QUrl
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings, QWebEnginePage
 from ..database.models import Database, SiteConfig, PageConfig, CrawlStrategy, CrawlTask
 from ..crawler.crawler_engine import CrawlerEngine
 from ..crawler.data_exporter import DataExporter
+
+# 创建全局自定义配置文件实例
+_persistent_profile = None
+
+# 在应用程序开始时创建自定义配置文件，确保所有QWebEngineView实例都使用正确的缓存设置
+def setup_web_engine_profile():
+    """创建并配置自定义的WebEngine配置文件以启用持久化存储"""
+    global _persistent_profile
+    
+    try:
+        # 创建存储目录
+        app_data_dir = os.path.join(os.path.expanduser('~'), '.web_crawler_tool')
+        cache_dir = os.path.join(app_data_dir, 'cache')
+        data_dir = os.path.join(app_data_dir, 'data')
+        
+        for dir_path in [app_data_dir, cache_dir, data_dir]:
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path, exist_ok=True)
+                print(f"[配置] 创建存储目录: {dir_path}")
+        
+        # 创建一个全新的自定义配置文件，而不是修改默认配置文件
+        # 这是确保缓存正确工作的关键
+        _persistent_profile = QWebEngineProfile("persistent_browser", None)
+        
+        # 设置缓存和存储路径
+        _persistent_profile.setCachePath(cache_dir)
+        _persistent_profile.setPersistentStoragePath(data_dir)
+        
+        # 强制使用持久化Cookie策略
+        _persistent_profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+        
+        # 设置为磁盘缓存模式
+        _persistent_profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+        
+        # 设置缓存大小限制
+        _persistent_profile.setHttpCacheMaximumSize(50 * 1024 * 1024)  # 50MB
+        
+        # 验证配置
+        print(f"[配置] 已创建并配置自定义WebEngine配置文件:")
+        print(f"  - 缓存路径: {_persistent_profile.cachePath()}")
+        print(f"  - 持久存储路径: {_persistent_profile.persistentStoragePath()}")
+        print(f"  - Cookie策略: {_persistent_profile.persistentCookiesPolicy()}")
+        print(f"  - 缓存类型: {_persistent_profile.httpCacheType()}")
+        
+        print("[配置] 自定义WebEngine配置文件已准备就绪")
+        return True
+    except Exception as e:
+        print(f"[配置] 创建WebEngine配置文件时出错: {str(e)}")
+        return False
+
+def get_persistent_profile():
+    """获取自定义的持久化配置文件"""
+    global _persistent_profile
+    return _persistent_profile
 
 
 class CrawlWorker(QObject):
@@ -36,12 +92,13 @@ class CrawlWorker(QObject):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
     
-    def __init__(self, engine: CrawlerEngine, start_url: str, page_config: dict, strategy: dict):
+    def __init__(self, engine: CrawlerEngine, start_url: str, page_config: dict, strategy: dict, form_data: dict = None):
         super().__init__()
         self.engine = engine
         self.start_url = start_url
         self.page_config = page_config
         self.strategy = strategy
+        self.form_data = form_data  # 表单数据，用于表单查询
         self.is_running = True
     
     def stop(self):
@@ -58,13 +115,25 @@ class CrawlWorker(QObject):
                     raise Exception("爬虫已停止")
                 self.progress.emit(kwargs)
             
-            # 直接在主线程中调用start_crawl方法
-            data = self.engine.start_crawl(
-                self.start_url,
-                self.page_config,
-                self.strategy,
-                progress_callback,
-            )
+            # 根据是否有表单数据选择不同的抓取方法
+            if self.form_data:
+                # 使用表单查询抓取
+                data = self.engine.start_crawl_with_form(
+                    self.start_url,
+                    self.page_config,
+                    self.strategy,
+                    self.form_data,
+                    progress_callback,
+                )
+            else:
+                # 使用普通抓取
+                data = self.engine.start_crawl(
+                    self.start_url,
+                    self.page_config,
+                    self.strategy,
+                    progress_callback,
+                )
+            
             if self.is_running:
                 self.finished.emit(data)
         except Exception as e:
@@ -85,6 +154,11 @@ class MainWindow(QMainWindow):
         self.task_model = CrawlTask(self.db)
         self.exporter = DataExporter()
         
+        # 获取自定义配置文件
+        self.profile = get_persistent_profile()
+        print("📋 WebEngine配置文件关联状态:")
+        print(f"  - 配置文件状态: {'已准备就绪' if self.profile else '未设置'}")
+        
         self.current_site_id = None
         self.current_page_config = None
         self.crawl_thread = None
@@ -93,6 +167,7 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         self.load_site_configs()
+
 
     def init_ui(self):
         """初始化UI"""
@@ -168,25 +243,151 @@ class MainWindow(QMainWindow):
         toolbar_layout.addStretch()
         layout.addLayout(toolbar_layout)
 
-        # 浏览器视图 - 使用 QWebEngineView
-        self.browser_view = QWebEngineView()
+        # 先创建日志控件，确保log方法可用
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(150)
+        
+        # 浏览器视图 - 使用 QWebEngineView，应用自定义配置文件
+        if self.profile:
+            # 创建一个与自定义配置文件关联的页面
+            page = QWebEnginePage(self.profile, self)
+            # 创建浏览器视图
+            self.browser_view = QWebEngineView()
+            # 将自定义页面设置到浏览器视图
+            self.browser_view.setPage(page)
+            print("✅ 已成功将自定义配置文件应用到浏览器视图")
+        else:
+            # 如果自定义配置文件不可用，使用默认方式创建
+            self.browser_view = QWebEngineView()
+            print("⚠️ 使用默认配置创建浏览器视图")
+            
+        self.browser_view.setFixedWidth(1440)
         self.browser_view.setMinimumHeight(300)
+        
+        # 添加错误处理和调试信号连接
+        self.browser_view.loadStarted.connect(lambda: self.log("🌐 页面开始加载"))
+        self.browser_view.loadFinished.connect(lambda success: 
+            self.log(f"🌐 页面加载完成: {'成功' if success else '失败'}, 浏览器宽度: {self.browser_view.width()}px")
+        )
+        self.browser_view.loadProgress.connect(lambda progress: 
+            self.log(f"🌐 加载进度: {progress}%") if progress % 20 == 0 else None
+        )
+        
+        # 捕获URL变化
+        self.browser_view.urlChanged.connect(lambda url: 
+            self.log(f"🌐 URL变化: {url.toString()}")
+        )
+        
+        # 增强的浏览器设置，特别是针对政府网站访问
+        from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
+        settings = self.browser_view.page().settings()
+        
+        # 只设置基本必要的属性，避免使用可能不存在的属性
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, True)
+        
+        # 设置持久化存储路径以保持登录状态
+        import os
+        import platform
+        app_data_dir = os.path.join(os.path.expanduser('~'), '.web_crawler_tool')
+        cache_dir = os.path.join(app_data_dir, 'cache')
+        data_dir = os.path.join(app_data_dir, 'data')
+        
+        print(f"🖥️  操作系统: {platform.system()}, Python版本: {platform.python_version()}")
+        
+        # 检查存储目录状态
+        try:
+            for dir_path in [app_data_dir, cache_dir, data_dir]:
+                if os.path.exists(dir_path):
+                    print(f"✅ 确认存储目录存在: {dir_path}")
+                    if os.access(dir_path, os.W_OK):
+                        print(f"🔓 目录可写: {dir_path}")
+                    else:
+                        print(f"🔒 目录不可写: {dir_path}")
+                else:
+                    print(f"❌ 目录不存在: {dir_path}")
+            
+            # 验证浏览器视图使用的配置
+            profile = self.browser_view.page().profile()
+            print(f"📋 当前浏览器视图配置:")
+            print(f"  - 缓存路径: {profile.cachePath()}")
+            print(f"  - 持久存储路径: {profile.persistentStoragePath()}")
+            print(f"  - Cookie策略: {profile.persistentCookiesPolicy()}")
+            print(f"  - 缓存类型: {profile.httpCacheType()}")
+            print(f"  - 配置文件名称: {profile.storageName()}")
+            
+            # 尝试在缓存目录中创建一个临时文件来测试写入权限
+            try:
+                test_file_path = os.path.join(profile.cachePath(), '.test_write')
+                with open(test_file_path, 'w') as f:
+                    f.write('test')
+                os.remove(test_file_path)
+                print(f"✅ 成功验证缓存目录写入权限: {profile.cachePath()}")
+            except Exception as write_error:
+                print(f"🔴 验证缓存目录写入权限失败: {str(write_error)}")
+            
+            self.log("✅ 浏览器已使用全局配置文件，将保持登录状态")
+        except Exception as e:
+            print(f"⚠️  检查浏览器配置时出错: {str(e)}")
+            self.log(f"⚠️  检查浏览器配置时出错: {str(e)}")
+            
+        # 为当前视图启用必要的设置
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, True)
+        
+        # 设置用户代理（使用现代浏览器标识）
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+        profile.setHttpUserAgent(user_agent)
+        
+        self.log("✅ 浏览器持久化存储已配置，将保持登录状态")
+        # 添加SSL证书错误处理
+        def handle_certificate_error(web_engine_page, certificate_error):
+            # 记录证书错误但继续加载（仅用于测试，生产环境应谨慎处理）
+            error_str = certificate_error.errorDescription()
+            self.log(f"⚠️ SSL证书错误: {error_str}")
+            certificate_error.ignoreCertificateError()
+            return True
+        
+        self.browser_view.page().certificateError.connect(handle_certificate_error)
+        
+        # 添加页面错误处理
+        self.browser_view.page().loadStarted.connect(lambda: self.log("🌐 页面开始加载"))
+        self.browser_view.page().loadFinished.connect(lambda success: 
+            self.log(f"🌐 页面加载完成: {'成功' if success else '失败'}")
+        )
+        
+        # 添加组件到布局
         layout.addWidget(self.browser_view)
 
         # 控制面板
         control_panel = self.create_control_panel()
         layout.addWidget(control_panel)
 
-        # 进度和日志
+        # 进度条
         self.progress_bar = QProgressBar()
         layout.addWidget(self.progress_bar)
-
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
+        
+        # 添加日志控件到布局
         layout.addWidget(self.log_text)
 
         return panel
+    
+    def handle_js_console_message(self, level, message, line_number, source_id):
+        """处理JavaScript控制台消息"""
+        level_str = "信息"
+        if level == self.browser_view.page().JavaScriptConsoleMessageLevel.InfoMessageLevel:
+            level_str = "信息"
+        elif level == self.browser_view.page().JavaScriptConsoleMessageLevel.WarningMessageLevel:
+            level_str = "警告"
+        elif level == self.browser_view.page().JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            level_str = "错误"
+        
+        self.log(f"📜 JS {level_str} ({source_id}:{line_number}): {message}")
 
     def create_control_panel(self) -> QWidget:
         """创建控制面板"""
@@ -207,6 +408,58 @@ class MainWindow(QMainWindow):
         
         strategy_layout.addStretch()
         layout.addLayout(strategy_layout)
+        
+        # 表单查询配置（简化版）
+        form_layout = QVBoxLayout()
+        form_layout.addWidget(QLabel("📝 表单查询配置:"))
+        
+        # 表单字段配置（灵活版）
+        field_layout = QHBoxLayout()
+        field_layout.addWidget(QLabel("字段选择器:"))
+        from PyQt6.QtWidgets import QLineEdit
+        self.field_selector = QLineEdit()
+        self.field_selector.setText("input[name='applicant']")
+        self.field_selector.setPlaceholderText("例如: input[name='applicant'] 或 #search-input")
+        field_layout.addWidget(self.field_selector)
+        form_layout.addLayout(field_layout)
+        
+        # 字段值
+        value_layout = QHBoxLayout()
+        value_layout.addWidget(QLabel("字段值:"))
+        self.field_value = QLineEdit()
+        self.field_value.setPlaceholderText("输入要查询的值")
+        value_layout.addWidget(self.field_value)
+        form_layout.addLayout(value_layout)
+        
+        # 查询按钮选择器
+        search_btn_layout = QHBoxLayout()
+        search_btn_layout.addWidget(QLabel("查询按钮选择器:"))
+        self.search_btn_selector = QLineEdit()
+        self.search_btn_selector.setText(".search-button")
+        self.search_btn_selector.setPlaceholderText("例如: .search-button 或 #search")
+        search_btn_layout.addWidget(self.search_btn_selector)
+        form_layout.addLayout(search_btn_layout)
+        
+        # 加载指示器选择器
+        loading_layout = QHBoxLayout()
+        loading_layout.addWidget(QLabel("加载指示器选择器:"))
+        self.loading_selector = QLineEdit()
+        self.loading_selector.setText(".q-loading")
+        self.loading_selector.setPlaceholderText("例如: .loading 或 #loading-indicator")
+        loading_layout.addWidget(self.loading_selector)
+        form_layout.addLayout(loading_layout)
+        
+        # 结果ID字段名
+        result_id_layout = QHBoxLayout()
+        result_id_layout.addWidget(QLabel("结果ID字段名:"))
+        self.result_id_field = QLineEdit()
+        self.result_id_field.setText("申请号")
+        self.result_id_field.setPlaceholderText("用于去重的字段名")
+        result_id_layout.addWidget(self.result_id_field)
+        form_layout.addLayout(result_id_layout)
+        
+        form_layout.addWidget(QLabel("提示: 留空字段值将使用普通抓取模式"))
+        layout.addLayout(form_layout)
 
         # 控制按钮
         btn_layout = QHBoxLayout()
@@ -346,8 +599,30 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "未找到抓取策略")
             return
         
+        # 检查是否使用表单查询模式
+        form_data = None
+        if hasattr(self, 'field_value') and self.field_value.text().strip():
+            # 使用表单查询模式
+            field_value = self.field_value.text().strip()
+            field_selector = self.field_selector.text().strip() or "input[name='applicant']"
+            search_btn_selector = self.search_btn_selector.text().strip()
+            loading_selector = self.loading_selector.text().strip()
+            result_id_field = self.result_id_field.text().strip()
+            
+            # 构建表单数据
+            form_data = {
+                "fields": {
+                    field_selector: field_value,  # 使用用户配置的字段选择器
+                },
+                "search_button_selector": search_btn_selector or ".search-button",
+                "loading_selector": loading_selector or ".q-loading",
+                "result_id_field": result_id_field or "申请号"
+            }
+            
+            self.log(f"🔍 开始表单查询抓取 - 字段: {field_selector}, 值: {field_value}")
+        else:
+            self.log("🚀 开始普通抓取任务...")
         
-        self.log("🚀 开始抓取任务...")
         self.start_btn.setEnabled(False)
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
@@ -358,7 +633,7 @@ class MainWindow(QMainWindow):
         
         # 创建爬虫工作器（在主线程中执行）
         self.crawl_worker = CrawlWorker(
-            self.crawler_engine, site['start_url'], self.current_page_config, strategy
+            self.crawler_engine, site['start_url'], self.current_page_config, strategy, form_data
         )
         self.crawl_worker.progress.connect(self.on_crawl_progress)
         self.crawl_worker.finished.connect(self.on_crawl_finished)

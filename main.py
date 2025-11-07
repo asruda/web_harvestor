@@ -5,22 +5,27 @@ Web Data Crawler Tool
 
 import sys
 from PyQt6.QtWidgets import QApplication
-from src.ui.main_window import MainWindow
+from src.ui.main_window import MainWindow, setup_web_engine_profile
 
 
 def main():
     """主函数"""
     print("1. 开始初始化应用程序...")
+
+    # 创建应用程序实例
+    app = QApplication(sys.argv)
+    
+    # 设置应用程序信息
+    app.setApplicationName("网页数据抓取工具")
+    app.setApplicationVersion("0.1.0")
+    app.setOrganizationName("WebCrawler")
+    
+    # 配置WebEngine，确保在创建任何Web视图之前执行
+    print("1.1 配置WebEngine环境...")
+    setup_web_engine_profile()
     
     # 添加异常捕获
     try:
-        app = QApplication(sys.argv)
-        
-        # 设置应用程序信息
-        app.setApplicationName("网页数据抓取工具")
-        app.setApplicationVersion("0.1.0")
-        app.setOrganizationName("WebCrawler")
-        
         print("2. 创建主窗口实例...")
         # 创建并显示主窗口
         window = MainWindow()
@@ -37,7 +42,6 @@ def main():
         # 尝试显示错误对话框
         try:
             from PyQt6.QtWidgets import QMessageBox
-            app = QApplication(sys.argv)
             QMessageBox.critical(None, "错误", error_info)
         except:
             pass
