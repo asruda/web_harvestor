@@ -84,6 +84,21 @@ class Database:
                 FOREIGN KEY (page_config_id) REFERENCES page_configs(id) ON DELETE CASCADE
             )
         """)
+        
+        # 表单查询配置表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS form_configs (
+                id TEXT PRIMARY KEY,
+                page_config_id TEXT NOT NULL,
+                fields TEXT,  -- JSON格式存储表单字段选择器和默认值
+                search_button_selector TEXT,
+                search_button_js_function TEXT,  -- 高级JavaScript定位函数
+                loading_selector TEXT,
+                result_id_field TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (page_config_id) REFERENCES page_configs(id) ON DELETE CASCADE
+            )
+        """)
 
         # 抓取任务表
         cursor.execute("""
@@ -301,6 +316,79 @@ class CrawlStrategy:
             strategy["pagination_params"] = json.loads(strategy["pagination_params"])
             strategy["enable_link_tracking"] = bool(strategy["enable_link_tracking"])
         return strategy
+
+
+class FormConfig:
+    """表单查询配置模型"""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def create(
+        self,
+        id: str,
+        page_config_id: str,
+        fields: Optional[Dict] = None,
+        search_button_selector: str = ".search-button",
+        search_button_js_function: Optional[str] = None,
+        loading_selector: str = ".q-loading",
+        result_id_field: str = "申请号",
+    ) -> str:
+        """创建表单查询配置"""
+        self.db.execute(
+            """
+            INSERT INTO form_configs 
+            (id, page_config_id, fields, search_button_selector, 
+             search_button_js_function, loading_selector, result_id_field)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                id,
+                page_config_id,
+                json.dumps(fields or {}),
+                search_button_selector,
+                search_button_js_function,
+                loading_selector,
+                result_id_field,
+            ),
+        )
+        return id
+
+    def get_by_page(self, page_config_id: str) -> Optional[Dict]:
+        """获取页面的表单查询配置"""
+        config = self.db.fetchone(
+            "SELECT * FROM form_configs WHERE page_config_id = ?", (page_config_id,)
+        )
+        if config:
+            config["fields"] = json.loads(config["fields"])
+        return config
+
+    def update(
+        self,
+        id: str,
+        fields: Optional[Dict] = None,
+        search_button_selector: Optional[str] = None,
+        search_button_js_function: Optional[str] = None,
+        loading_selector: Optional[str] = None,
+        result_id_field: Optional[str] = None,
+    ):
+        """更新表单查询配置"""
+        update_fields = {}
+        if fields is not None:
+            update_fields["fields"] = json.dumps(fields)
+        if search_button_selector is not None:
+            update_fields["search_button_selector"] = search_button_selector
+        if search_button_js_function is not None:
+            update_fields["search_button_js_function"] = search_button_js_function
+        if loading_selector is not None:
+            update_fields["loading_selector"] = loading_selector
+        if result_id_field is not None:
+            update_fields["result_id_field"] = result_id_field
+        
+        if update_fields:
+            fields_str = ", ".join(f"{k} = ?" for k in update_fields.keys())
+            values = tuple(update_fields.values()) + (id,)
+            self.db.execute(f"UPDATE form_configs SET {fields_str} WHERE id = ?", values)
 
 
 class CrawlTask:

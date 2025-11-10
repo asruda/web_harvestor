@@ -51,26 +51,32 @@ class DataExtractor:
 
             row_data = {}
             for col_index, field_name in field_mappings.items():
-                if col_index < len(cells):
-                    cell = cells[col_index]
+                # 确保col_index是整数类型
+                try:
+                    col_idx = int(col_index)
+                    if col_idx < len(cells):
+                        cell = cells[col_idx]
                     
-                    # 提取文本内容
-                    text = cell.get_text(strip=True)
-                    
-                    # 检查是否包含链接
-                    link = cell.find("a")
-                    if link and link.get("href"):
-                        # 如果字段名包含"链接"或"url"，保存链接地址
-                        if "链接" in field_name.lower() or "url" in field_name.lower():
-                            text = link.get("href")
-                        # 否则同时保存文本和链接
-                        row_data[f"{field_name}_url"] = link.get("href")
-                    
-                    # 应用清洗规则
-                    if cleaning_rules and field_name in cleaning_rules:
-                        text = self._apply_cleaning_rule(text, cleaning_rules[field_name])
-                    
-                    row_data[field_name] = text
+                        # 提取文本内容
+                        text = cell.get_text(strip=True)
+                        
+                        # 检查是否包含链接
+                        link = cell.find("a")
+                        if link and link.get("href"):
+                            # 如果字段名包含"链接"或"url"，保存链接地址
+                            if "链接" in field_name.lower() or "url" in field_name.lower():
+                                text = link.get("href")
+                            # 否则同时保存文本和链接
+                            row_data[f"{field_name}_url"] = link.get("href")
+                        
+                        # 应用清洗规则
+                        if cleaning_rules and field_name in cleaning_rules:
+                            text = self._apply_cleaning_rule(text, cleaning_rules[field_name])
+                        
+                        row_data[field_name] = text
+                except (ValueError, TypeError):
+                    # 忽略无法转换为整数的列索引
+                    print(f"警告: 列索引 '{col_index}' 不是有效的整数，跳过该字段")
 
             if row_data:
                 results.append(row_data)
