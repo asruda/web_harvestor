@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QListWidget,
     QTextEdit,
+    QTextBrowser,
     QProgressBar,
     QSplitter,
     QMessageBox,
@@ -454,6 +455,9 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         self.load_site_configs()
+        
+        # 默认全屏显示窗口
+        self.showMaximized()
     
     def create_menus(self):
         """创建菜单栏"""
@@ -546,9 +550,14 @@ class MainWindow(QMainWindow):
         layout.addLayout(toolbar_layout)
 
         # 先创建日志控件，确保log方法可用
-        self.log_text = QTextEdit()
+        # 使用QTextBrowser而不是QTextEdit以支持链接点击功能
+        self.log_text = QTextBrowser()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(100)  # 减少日志控件高度，为浏览器视图腾出更多空间
+        # 启用富文本格式以支持HTML链接
+        self.log_text.setOpenExternalLinks(False)  # 不自动打开外部链接，使用自定义处理
+        # 连接anchorClicked信号到自定义槽函数
+        self.log_text.anchorClicked.connect(self.on_anchor_clicked)
         
         # 浏览器视图 - 使用 QWebEngineView，应用自定义配置文件
         if self.profile:
@@ -946,7 +955,13 @@ class MainWindow(QMainWindow):
                 )
                 
                 for fmt, path in results.items():
-                    self.log(f"💾 已导出{fmt}格式: {path}")
+                    # 确保路径可以被log方法正确识别为文件路径
+                    # 如果路径不包含扩展名，添加扩展名
+                    if not any(ext in path.lower() for ext in ['.csv', '.json', '.xlsx', '.txt']):
+                        self.log(f"💾 已导出{fmt}格式: {path}")
+                    else:
+                        # 直接将完整路径传递给log方法，让它处理路径转换
+                        self.log(f"💾 已导出{fmt}格式: {path}")
         
         self.start_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
@@ -965,11 +980,168 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "错误", f"抓取失败: {error}")
 
     def log(self, message: str):
-        """添加日志"""
+        """添加日志，支持可点击的文件路径"""
         import datetime
+        import re
+        import os
+        from pathlib import Path
+        
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
+        
+        # 检测消息中的文件路径并转换为可点击链接
+        def replace_path(match):
+            path = match.group(0)
+            
+            # 处理相对路径和绝对路径
+            test_path = path
+            
+            # 检查路径是否存在
+            if not os.path.exists(test_path):
+                # 尝试相对于当前工作目录的路径
+                current_dir = os.getcwd()
+                rel_path = os.path.join(current_dir, path)
+                if os.path.exists(rel_path):
+                    test_path = rel_path
+                else:
+                    # 优先检查是否为data/exports开头的路径
+                    if path.startswith('data/exports/') or path.startswith('data\\exports\\'):
+                        # 相对于项目根目录构造完整路径
+                        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                        # 获取相对路径部分（去掉data/exports/）
+                        rel_part = path.split('exports', 1)[1].lstrip('/\\')
+                        full_path = os.path.join(project_root, 'data', 'exports', rel_part)
+                        if os.path.exists(full_path):
+                            test_path = full_path
+                    else:
+                        # 尝试相对于项目根目录的data/exports路径
+                        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                        exports_path = os.path.join(project_root, 'data', 'exports')
+                        rel_export_path = os.path.join(exports_path, os.path.basename(path))
+                        if os.path.exists(rel_export_path):
+                            test_path = rel_export_path
+            
+            # 确保路径存在
+            if os.path.exists(test_path):
+                # 获取绝对路径以确保包含驱动器号
+                abs_path = os.path.abspath(test_path)
+                # 转换为HTML链接，使用正斜杠并确保正确的file:///格式
+                file_url = f"file:///{abs_path.replace('\\', '/')}"
+                # 使用更明显的样式显示可点击的文件名
+                return f'<a href="{file_url}" style="color: blue; text-decoration: underline;">{os.path.basename(test_path)}</a>'
+            return path
+        
+        # 优化的正则表达式，更宽松地匹配各种文件路径格式
+        patterns = [
+            # 捕获data/exports开头的路径，使用非贪婪匹配
+            r'(data[\\/]exports[\\/].*?\.(csv|json|xlsx|txt|xls))(?=\s|$)',
+            # 捕获任何带扩展名的文件路径，包含空格和特殊字符
+            r'(\b[\\/\\w\\s\\.-]+?\.(csv|json|xlsx|txt|xls))(?=\s|$)',
+            # 捕获带引号的路径
+            r'["\'](.*?\.(csv|json|xlsx|txt|xls))["\']',
+        ]
+        
+        formatted_message = message
+        for pattern in patterns:
+            # 使用re.MULTILINE标志确保在多行文本中也能正确匹配
+            formatted_message = re.sub(pattern, replace_path, formatted_message, flags=re.MULTILINE)
+        
+        # 确保使用HTML格式
+        self.log_text.append(f"[{timestamp}] {formatted_message}")
 
+    def on_anchor_clicked(self, url):
+        """处理QTextBrowser中的链接点击事件"""
+        import os
+        import sys
+        import subprocess
+        
+        # 获取URL的字符串表示
+        url_str = url.toString()
+        
+        # 专门处理file://链接
+        if url_str.startswith('file://'):
+            try:
+                # 提取路径部分
+                if url_str.startswith('file:///'):
+                    file_path = url_str[8:]  # 处理file:///格式
+                else:
+                    file_path = url_str[7:]  # 处理file://格式
+                
+                # Windows路径特殊处理
+                if os.name == 'nt':
+                    # 修复Windows路径格式
+                    file_path = file_path.lstrip('/').replace('/', '\\')
+                
+                # 尝试多种路径方式，按优先级排序
+                test_paths = []
+                
+                # 1. 直接使用提取的路径（应该已经是绝对路径）
+                if os.path.exists(file_path):
+                    test_paths.append(file_path)
+                
+                # 2. 尝试绝对路径
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path) and abs_path not in test_paths:
+                    test_paths.append(abs_path)
+                
+                # 3. 尝试相对于当前工作目录的路径
+                current_dir = os.getcwd()
+                rel_path = os.path.join(current_dir, file_path)
+                if os.path.exists(rel_path) and rel_path not in test_paths:
+                    test_paths.append(rel_path)
+                
+                # 4. 尝试相对于项目根目录的data/exports路径
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                exports_dir = os.path.join(project_root, 'data', 'exports')
+                # 只取文件名部分，加入到exports目录
+                file_name = os.path.basename(file_path)
+                export_path = os.path.join(exports_dir, file_name)
+                if os.path.exists(export_path) and export_path not in test_paths:
+                    test_paths.append(export_path)
+                
+                # 记录尝试的路径，便于调试
+                self.log(f"尝试打开文件: {file_name}")
+                
+                # 尝试打开找到的第一个有效路径
+                if test_paths:
+                    final_path = test_paths[0]
+                    # self.log(f"找到文件: {final_path}")
+                    
+                    # Windows下使用多种方式尝试打开文件
+                    if os.name == 'nt':
+                        try:
+                            # 方式1: 使用explorer.exe
+                            # self.log(f"使用explorer.exe打开: {final_path}")
+                            subprocess.run(['explorer.exe', final_path], shell=False, timeout=5)
+                        except (subprocess.SubprocessError, TimeoutError):
+                            try:
+                                # 方式2: 使用cmd /c start命令
+                                self.log(f"使用cmd /c start打开: {final_path}")
+                                # 路径带引号以处理空格
+                                subprocess.run(['cmd.exe', '/c', 'start', '', f'"{final_path}"'], shell=False, timeout=5)
+                            except (subprocess.SubprocessError, TimeoutError):
+                                # 方式3: 直接使用系统默认程序打开
+                                self.log(f"直接使用系统默认程序打开: {final_path}")
+                                os.startfile(final_path)
+                    else:
+                        # macOS和Linux
+                        opener = 'open' if sys.platform == 'darwin' else 'xdg-open'
+                        self.log(f"使用{opener}打开: {final_path}")
+                        subprocess.Popen([opener, final_path])
+                else:
+                    # 所有路径都不存在时记录详细日志
+                    self.log(f"无法找到文件: {file_path}")
+                    self.log(f"尝试过的路径: {test_paths}")
+                    self.log(f"当前工作目录: {os.getcwd()}")
+                    self.log(f"项目导出目录: {exports_dir}")
+            except Exception as e:
+                # 异常处理，记录详细错误
+                self.log(f"打开文件失败: {str(e)}")
+                import traceback
+                self.log(f"错误详情: {traceback.format_exc()}")
+        else:
+            # 非文件链接的处理
+            self.log(f"不支持的链接类型: {url_str}")
+    
     def closeEvent(self, a0):  # type: ignore
         """关闭窗口事件"""
         if not a0:
