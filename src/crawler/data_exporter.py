@@ -24,13 +24,50 @@ class DataExporter:
 
         filepath = self.export_dir / f"{filename}.csv"
         
-        # 获取所有字段
-        fieldnames = list(data[0].keys())
+        # 按照用户要求的列顺序
+        required_columns = [
+            "序号", "专利权人", "申请日", "专利名称", "专利号", 
+            "授权公告日", "专利类型", "发明专利申请公布号", 
+            "授权公告号", "案件状态", "主分类号"
+        ]
+        
+        # 处理数据，只保留需要的字段
+        processed_data = []
+        for idx, record in enumerate(data, 1):
+            # 创建新字典，只包含需要的字段
+            processed_record = {}
+            processed_record["序号"] = idx
+            
+            # 映射可能的字段名变体
+            field_mappings = {
+                "专利权人": ["专利权人", "申请人"],
+                "申请日": ["申请日", "申请日期"],
+                "专利名称": ["专利名称", "名称"],
+                "专利号": ["专利号", "申请号"],
+                "授权公告日": ["授权公告日", "公告日期"],
+                "专利类型": ["专利类型", "类型"],
+                "发明专利申请公布号": ["发明专利申请公布号", "公布号"],
+                "授权公告号": ["授权公告号", "公告号"],
+                "案件状态": ["案件状态", "状态"],
+                "主分类号": ["主分类号", "分类号"]
+            }
+            
+            # 填充字段值
+            for target_col, source_cols in field_mappings.items():
+                for source_col in source_cols:
+                    if source_col in record:
+                        processed_record[target_col] = record[source_col]
+                        break
+                else:
+                    # 如果所有可能的源字段都不存在，设置为空字符串
+                    processed_record[target_col] = ""
+            
+            processed_data.append(processed_record)
         
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=required_columns)
             writer.writeheader()
-            writer.writerows(data)
+            writer.writerows(processed_data)
         
         return str(filepath)
 
@@ -62,7 +99,50 @@ class DataExporter:
             import pandas as pd
             
             filepath = self.export_dir / f"{filename}.xlsx"
-            df = pd.DataFrame(data)
+            
+            # 按照用户要求的列顺序
+            required_columns = [
+                "序号", "专利权人", "申请日", "专利名称", "专利号", 
+                "授权公告日", "专利类型", "发明专利申请公布号", 
+                "授权公告号", "案件状态", "主分类号"
+            ]
+            
+            # 处理数据，只保留需要的字段（复用CSV导出的处理逻辑）
+            processed_data = []
+            for idx, record in enumerate(data, 1):
+                # 创建新字典，只包含需要的字段
+                processed_record = {}
+                processed_record["序号"] = idx
+                
+                # 映射可能的字段名变体
+                field_mappings = {
+                    "专利权人": ["专利权人", "申请人"],
+                    "申请日": ["申请日", "申请日期"],
+                    "专利名称": ["专利名称", "名称"],
+                    "专利号": ["专利号", "申请号"],
+                    "授权公告日": ["授权公告日", "公告日期"],
+                    "专利类型": ["专利类型", "类型"],
+                    "发明专利申请公布号": ["发明专利申请公布号", "公布号"],
+                    "授权公告号": ["授权公告号", "公告号"],
+                    "案件状态": ["案件状态", "状态"],
+                    "主分类号": ["主分类号", "分类号"]
+                }
+                
+                # 填充字段值
+                for target_col, source_cols in field_mappings.items():
+                    for source_col in source_cols:
+                        if source_col in record:
+                            processed_record[target_col] = record[source_col]
+                            break
+                    else:
+                        # 如果所有可能的源字段都不存在，设置为空字符串
+                        processed_record[target_col] = ""
+                
+                processed_data.append(processed_record)
+            
+            # 创建DataFrame并按照指定顺序排列列
+            df = pd.DataFrame(processed_data)
+            df = df[required_columns]  # 重新排列列顺序
             df.to_excel(filepath, index=False, engine="openpyxl")
             
             return str(filepath)

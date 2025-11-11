@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import time
 import uuid
 from typing import List, Dict, Optional, Callable
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -203,9 +204,9 @@ class CrawlerEngine:
             )
             
         except Exception as e:
-            print(f"抓取过程出错: {e}")
             import traceback
             traceback.print_exc()
+            raise Exception(f"抓取过程出错: {e}")
         finally:
             self.browser.close()
             self.is_running = False
@@ -678,10 +679,21 @@ class CrawlerEngine:
             # 等待下一页加载完成
             print("⏳ 等待下一页数据加载...")
             loading_selector = form_data.get("loading_selector", ".q-loading")
-            load_success = self._wait_for_loading_complete_sync(loading_selector)
+
+            # 设计一个超时等待，超时默认值60秒，使得load_success必须为true
+            load_success = False
+            timeout = 120
+            start_time = time.time()
+            while time.time() - start_time <= timeout:
+                load_success = self._wait_for_loading_complete_sync(loading_selector)
+                if not load_success:
+                    print("等待loading加载完成超时, 继续等待...")
+                    continue
+                else:
+                    break
             if not load_success:
                 print("❌ 下一页加载失败")
-                break
+                raise Exception("❌ 下一页加载失败")
             
             # 等待页面稳定
             from PyQt6.QtCore import QEventLoop, QTimer
@@ -904,6 +916,20 @@ class CrawlerEngine:
             case_status_text = re.sub(r'<[^>]+>', '', case_status_text).strip()
             patent_data['案件状态'] = case_status_text
         
+        # 提取授权公告日 - 使用更通用的匹配模式
+        grant_date_match = re.search(r'授权公告日：([^<]*)(?=<span|</span>|$)', info_html)
+        if grant_date_match:
+            grant_date_text = grant_date_match.group(1).strip()
+            grant_date_text = re.sub(r'<[^>]+>', '', grant_date_text).strip()
+            patent_data['授权公告日'] = grant_date_text
+        
+        # 提取主分类号 - 使用更通用的匹配模式
+        main_class_match = re.search(r'主分类号：([^<]*)(?=<span|</span>|$)', info_html)
+        if main_class_match:
+            main_class_text = main_class_match.group(1).strip()
+            main_class_text = re.sub(r'<[^>]+>', '', main_class_text).strip()
+            patent_data['主分类号'] = main_class_text
+
         # 如果HTML解析失败，回退到纯文本解析
         if not patent_data:
             clean_text = re.sub(r'<[^>]+>', ' ', info_html)
@@ -1053,7 +1079,6 @@ class CrawlerEngine:
                 print(f"   - 表格数据行数: {len(result_data['tableData'])}")
             if 'tableInfoData' in result_data:
                 print(f"   - 详情信息数: {len(result_data['tableInfoData'])}")
-            
             # 提取结构化数据
             table_info_list = self._extract_table_info(result_data)
             
@@ -1067,38 +1092,10 @@ class CrawlerEngine:
                     patent_number = record.get('专利号', 'N/A')
                     patent_name = record.get('专利名称', 'N/A')
                     print(f"   - 记录 {i+1}: {patent_number} - {patent_name[:30]}...")
-            else:
-                print("   - 未提取到有效专利记录")
-                # 回退到使用模拟数据以确保功能可用
-                print("🟡 未提取到数据，返回模拟数据以确保功能可用")
-                mock_data = [
-                    {
-                        "专利号": "ZL20231000001",
-                        "专利名称": "新型智能设备",
-                        "申请日期": "2023-01-01",
-                        "申请人": "张三",
-                        "专利类型": "发明专利",
-                        "_source_url": "https://example.com/patent/1",
-                        "_page_title": "模拟专利查询结果"
-                    }
-                ]
-                return mock_data
-            
+
             return table_info_list
             
-        except Exception as e:
-            print(f"❌ 获取查询结果失败: {str(e)}")
+        except Exception as e:          
             import traceback
             traceback.print_exc()
-            # 出错时返回模拟数据
-            return [
-                {
-                    "专利号": "ZL20231000001",
-                    "专利名称": "新型智能设备",
-                    "申请日期": "2023-01-01",
-                    "申请人": "张三",
-                    "专利类型": "发明专利",
-                    "_source_url": "https://example.com/patent/1",
-                    "_page_title": "模拟专利查询结果"
-                }
-            ]
+            raise(f"❌ 获取查询结果失败: {str(e)}")

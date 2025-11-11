@@ -136,9 +136,9 @@ class CrawlWorker(QObject):
             if self.is_running:
                 self.finished.emit(data)
         except Exception as e:
+            self.error.emit(f"{str(e)}")
             import traceback
             error_info = f"错误: {str(e)}\n{traceback.format_exc()}"
-            self.error.emit(error_info)
             print(error_info)  # 同时打印到控制台以便调试
 
 class FormConfigDialog(QDialog):
@@ -706,19 +706,19 @@ class MainWindow(QMainWindow):
         panel.setStyleSheet("background-color: #ffffff; border: 1px solid #ddd; padding: 10px;")
         layout = QVBoxLayout(panel)
 
-        # 抓取策略
-        strategy_layout = QHBoxLayout()
-        strategy_layout.addWidget(QLabel("抓取策略:"))
-        self.strategy_label = QLabel("默认策略")
-        strategy_layout.addWidget(self.strategy_label)
+        # # 抓取策略
+        # strategy_layout = QHBoxLayout()
+        # strategy_layout.addWidget(QLabel("抓取策略:"))
+        # self.strategy_label = QLabel("默认策略")
+        # strategy_layout.addWidget(self.strategy_label)
         
-        # 添加编辑策略按钮
-        edit_strategy_btn = QPushButton("✏️ 编辑策略")
-        edit_strategy_btn.clicked.connect(self.edit_strategy)
-        strategy_layout.addWidget(edit_strategy_btn)
+        # # 添加编辑策略按钮
+        # edit_strategy_btn = QPushButton("✏️ 编辑策略")
+        # edit_strategy_btn.clicked.connect(self.edit_strategy)
+        # strategy_layout.addWidget(edit_strategy_btn)
         
-        strategy_layout.addStretch()
-        layout.addLayout(strategy_layout)
+        # strategy_layout.addStretch()
+        # layout.addLayout(strategy_layout)
         
         # 移除了表单查询配置相关选项
 
@@ -939,11 +939,11 @@ class MainWindow(QMainWindow):
         
         percentage = int((current / total) * 100) if total > 0 else 0
         self.progress_bar.setValue(percentage)
-        self.log(f"📊 {message}")
+        self.log_text.append(f"📊 {message}")
 
     def on_crawl_finished(self, data: list):
         """抓取完成"""
-        self.log(f"✅ 抓取完成! 共获取 {len(data)} 条数据")
+        self.log_text.append(f"✅ 抓取完成! 共获取 {len(data)} 条数据")
         
         # 导出数据
         if data and self.current_site_id:
