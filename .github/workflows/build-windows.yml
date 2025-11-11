@@ -28,10 +28,10 @@ jobs:
     
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconsole --name='web_crawler' --add-data='src;src' main.py
+        pyinstaller --noconsole --name='web_harvestor' --add-data='src;src' main.py
     
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: web-crawler-windows
-        path: dist/web_crawler
+        name: web-harvestor-windows
+        path: dist/web_harvestor

@@ -1,6 +1,6 @@
-# 网页数据抓取工具 (Web Data Crawler)
+# 网页数据采集工具 (Web Data Harvestor)
 
-拉取数据
+for 批量拉取数据
 
 ## 使用说明
 
