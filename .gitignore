@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.spec
 
 # Virtual Environment
 venv/
@@ -32,6 +33,7 @@ env/
 *.swp
 *.swo
 *~
+.qoder
 
 # Database
 *.db
@@ -64,3 +66,6 @@ test_exports/
 # Distribution
 *.exe
 *.msi
+
+# reference
+.reference/

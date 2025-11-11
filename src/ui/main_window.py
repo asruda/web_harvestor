@@ -760,6 +760,11 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "新建配置", "请输入网站名称:")
         if ok and name:
             url, ok = QInputDialog.getText(self, "新建配置", "请输入起始URL:")
+            from src.const.crawl import support_site
+            if url not in support_site:
+                self.log("❌ 不支持的网站URL")
+                QMessageBox.critical(self, "错误", "❌ 不支持的网站URL")
+                return
             if ok and url:
                 site_id = str(uuid.uuid4())
                 self.site_config_model.create(site_id, name, url)
